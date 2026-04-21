@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import FastAPI, Query
 
@@ -18,10 +19,62 @@ logging.basicConfig(
 )
 logger = logging.getLogger("search-backend")
 
-app = FastAPI(title="Open WebUI Local Search Backend", version="1.0.0")
+app = FastAPI(title="Open WebUI Local Search Backend", version="1.1.0")
 config = DEFAULT_CONFIG
 provider = DuckDuckGoHtmlProvider(config)
 cache = TTLCache[SearchResponse](ttl_seconds=config.cache_ttl_seconds)
+
+
+def _result_to_external_item(result: Any) -> dict[str, Any]:
+    return {
+        "title": result.title,
+        "url": str(result.url),
+        "snippet": result.snippet,
+        "source": result.source,
+        "content": result.content,
+        "published_date": result.published_date,
+        "retrieved_at": result.retrieved_at.isoformat(),
+        "score": result.score,
+    }
+
+
+async def _run_search(
+    query_text: str,
+    max_results: int,
+    mode: SearchMode | None,
+) -> SearchResponse:
+    cache_key = f"{query_text}|{max_results}|{mode}"
+    cached = cache.get(cache_key)
+    if cached:
+        return cached
+
+    intent = classify_intent(query_text, mode_override=mode)
+    logger.info("search request query=%r mode=%s", query_text, intent.mode)
+
+    initial = await provider.search(
+        query_text,
+        max_results=max(max_results * 2, config.max_search_results),
+    )
+    ranked = rank_results(initial, query_text, intent, config)
+    final = ranked[:max_results]
+    await enrich_results(final, intent, config)
+
+    warning = None
+    if intent.mode == "latest" and not any(r.published_date for r in final[:3]):
+        warning = (
+            "Fresh date signals were limited for this query. "
+            "Consider refining with vendor/product names or a tighter timeframe."
+        )
+
+    response = SearchResponse(
+        query=query_text,
+        mode=intent.mode,
+        total_results=len(final),
+        results=final,
+        warning=warning,
+    )
+    cache.set(cache_key, response)
+    return response
 
 
 @app.get("/health")
@@ -35,32 +88,19 @@ async def search(
     max_results: int = Query(default=8, ge=1, le=20),
     mode: SearchMode | None = Query(default=None, description="latest|docs|general override"),
 ) -> SearchResponse:
-    cache_key = f"{q}|{max_results}|{mode}"
-    cached = cache.get(cache_key)
-    if cached:
-        return cached
+    return await _run_search(q, max_results, mode)
 
-    intent = classify_intent(q, mode_override=mode)
-    logger.info("search request query=%r mode=%s", q, intent.mode)
 
-    initial = await provider.search(q, max_results=max(max_results * 2, config.max_search_results))
-    ranked = rank_results(initial, q, intent, config)
-    final = ranked[:max_results]
-    await enrich_results(final, intent, config)
+@app.get("/external-search")
+async def external_search(
+    q: str | None = Query(default=None, min_length=2),
+    query: str | None = Query(default=None, min_length=2),
+    max_results: int = Query(default=8, ge=1, le=20),
+    mode: SearchMode | None = Query(default=None),
+) -> list[dict[str, Any]]:
+    query_text = q or query
+    if not query_text:
+        return []
 
-    warning = None
-    if intent.mode == "latest" and not any(r.published_date for r in final[:3]):
-        warning = (
-            "Fresh date signals were limited for this query. "
-            "Consider refining with vendor/product names or a tighter timeframe."
-        )
-
-    response = SearchResponse(
-        query=q,
-        mode=intent.mode,
-        total_results=len(final),
-        results=final,
-        warning=warning,
-    )
-    cache.set(cache_key, response)
-    return response
+    response = await _run_search(query_text, max_results, mode)
+    return [_result_to_external_item(item) for item in response.results]
