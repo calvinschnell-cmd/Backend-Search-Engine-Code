@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
 
 from search.cache import TTLCache
 from search.config import DEFAULT_CONFIG
