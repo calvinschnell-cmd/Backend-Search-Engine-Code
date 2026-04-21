@@ -91,27 +91,53 @@ async def search(
     return await _run_search(q, max_results, mode)
 
 
-@app.get("/external-search")
+@app.api_route("/external-search", methods=["GET", "POST"])
 async def external_search(
+    request: Request,
     q: str | None = Query(default=None, min_length=2),
     query: str | None = Query(default=None, min_length=2),
     max_results: int = Query(default=8, ge=1, le=20),
     mode: SearchMode | None = Query(default=None),
 ):
-    query_text = q or query
+    body = {}
+    if request.method == "POST":
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+
+    query_text = (
+        q
+        or query
+        or body.get("query")
+        or body.get("q")
+        or body.get("keyword")
+        or body.get("search_query")
+    )
+
     if not query_text:
-        return {"results": []}
+        return {
+            "results": [],
+            "data": [],
+            "items": [],
+        }
 
     response = await _run_search(query_text, max_results, mode)
 
+    items = [
+        {
+            "title": item.title,
+            "link": str(item.url),
+            "url": str(item.url),
+            "snippet": item.snippet,
+            "content": item.snippet,
+        }
+        for item in response.results
+    ]
+
     return {
-        "results": [
-            {
-                "title": item.title,
-                "link": str(item.url),
-                "url": str(item.url),
-                "snippet": item.snippet,
-            }
-            for item in response.results
-        ]
+        "query": query_text,
+        "results": items,
+        "data": items,
+        "items": items,
     }
