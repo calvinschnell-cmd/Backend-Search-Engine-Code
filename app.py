@@ -100,15 +100,18 @@ async def external_search(
 ):
     query_text = q or query
     if not query_text:
-        return []
+        return {"data": []}
 
     response = await _run_search(query_text, max_results, mode)
 
-    return [
-        {
-            "title": item.title,
-            "link": str(item.url),
-            "snippet": item.snippet,
-        }
-        for item in response.results
-    ]
+    return {
+        "data": [
+            {
+                "title": item.title,
+                "url": str(item.url),
+                "link": str(item.url),
+                "snippet": item.snippet,
+            }
+            for item in response.results
+        ]
+    }
