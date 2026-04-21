@@ -97,10 +97,18 @@ async def external_search(
     query: str | None = Query(default=None, min_length=2),
     max_results: int = Query(default=8, ge=1, le=20),
     mode: SearchMode | None = Query(default=None),
-) -> list[dict[str, Any]]:
+):
     query_text = q or query
     if not query_text:
         return []
 
     response = await _run_search(query_text, max_results, mode)
-    return [_result_to_external_item(item) for item in response.results]
+
+    return [
+        {
+            "title": item.title,
+            "link": str(item.url),
+            "snippet": item.snippet,
+        }
+        for item in response.results
+    ]
